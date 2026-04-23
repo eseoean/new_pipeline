@@ -1,0 +1,53 @@
+{
+  "cancer_id": "PAAD",
+  "english_name": "Pancreatic adenocarcinoma",
+  "korean_name": "췌장암",
+  "tcga_codes": ["PAAD"],
+  "source_tier": "original_core",
+  "s3_raw_prefix": "s3://say2-4team/PAAD_raw",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_PAAD_V2/original_core",
+  "run_id": "260423_PAAD_V2_original_core",
+  "label": {
+    "regression_column": "LN_IC50",
+    "binary_quantile": 0.3,
+    "sensitive_direction": "lower"
+  },
+  "source_files": {
+    "gdsc_labels": "original_sources/gdsc/GDSC2-dataset.local.csv",
+    "gdsc_cell_line_details": "original_sources/gdsc/Cell_Lines_Details.xlsx",
+    "gdsc_screened_compounds": "original_sources/gdsc/screened_compounds_rel_8.5.csv",
+    "drug_smiles_catalog": "GDSC/drug_features_catalog_brca_reference_20260420.parquet",
+    "depmap_model": "original_sources/depmap/Model.csv",
+    "depmap_crispr_gene_effect": "original_sources/depmap/CRISPRGeneEffect.csv",
+    "lincs_pancancer": "Linc1000/local_enhancements/lincs_drug_signature_pancancer_20260421.parquet",
+    "lincs_pert_info_raw": "original_sources/lincs/GSE92742_Broad_LINCS_pert_info.txt.gz",
+    "raw_manifest": "additional_sources/manifests/paad_raw_source_manifest_20260421.json"
+  },
+  "large_raw_references_not_downloaded_by_default": {
+    "lincs_level5_gctx": "s3://say2-4team/PAAD_raw/Linc1000/gse70138_raw/GSE70138_Broad_LINCS_Level5_COMPZ_n118050x12328_2017-03-06.gctx.gz",
+    "chembl_sqlite_tar": "s3://say2-4team/oringinal_raw/chembl/chembl_36_sqlite.tar.gz",
+    "drugbank_full_xml": "s3://say2-4team/oringinal_raw/drugbank/full_database.xml"
+  },
+  "feature_limits": {
+    "full_crispr": 3500,
+    "legacy_crispr": 3000,
+    "compact_crispr": 5000,
+    "legacy_lincs": 768,
+    "legacy_morgan": 1100,
+    "compact_morgan": 1024,
+    "smiles_svd": 64
+  },
+  "variants": [
+    "legacy_rich_valid_smiles_only",
+    "legacy_rich_all_drugs_zero_smiles",
+    "colonstyle_compact_baseline"
+  ],
+  "benchmark": {
+    "folds": 4,
+    "models": ["lightgbm", "xgboost", "extratrees", "randomforest", "residual_mlp", "flat_mlp"],
+    "tree_estimators": 120,
+    "mlp_epochs": 10,
+    "random_state": 42
+  }
+}
+

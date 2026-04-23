@@ -30,6 +30,17 @@ Step 8. External validation, ADMET, KG, ClinicalTrials explanation
 
 Step 8 is intentionally separated from model selection. It explains and annotates selected drugs; it should not silently change the model ranking unless a separate post-ranking rescoring experiment is declared.
 
+## Source Tiers
+
+The pipeline can run with two source tiers.
+
+| Tier | Purpose |
+|---|---|
+| staged | Fast reproduction from already curated raw-folder parquet/CSV files |
+| original_core | Rebuild core labels, cell mapping, and CRISPR features from original source files, while documenting any remaining curated bridges |
+
+For PAAD, `configs/paad.json` is the staged reproduction config, and `configs/paad_original_core.json` is the original-core validation config. The original-core run is meant to answer a stricter provenance question: can the model input be reproduced from unprocessed GDSC and DepMap source files, not only from prebuilt parquet tables?
+
 ## Canonical Intermediate Tables
 
 The pipeline writes these tables under:
@@ -89,4 +100,3 @@ Recommended decision order:
 2. compare `drug_group_4fold` and `scaffold_group_4fold`;
 3. use `random_4fold` as a sanity check, not the sole selection criterion;
 4. keep compact colon-style as a reproducibility/control baseline even when it is not the top performer.
-

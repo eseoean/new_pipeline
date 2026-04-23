@@ -280,22 +280,19 @@ def build_intermediate_tables(
     paths: RunPaths,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     labels_raw = read_source(config, paths, "gdsc_labels")
-    gdsc_cells = read_source(config, paths, "gdsc_cell_annotations")
-    gdsc_drugs = read_source(config, paths, "gdsc_drug_annotations")
     depmap = read_source(config, paths, "depmap_model")
     smiles = read_source(config, paths, "drug_smiles_catalog")
 
-    gdsc = labels_raw.merge(gdsc_cells, on="SANGER_MODEL_ID", how="left")
+    if config.get("source_tier") == "original_core":
+        gdsc = labels_raw.copy()
+        gdsc_drugs = gdsc[["DRUG_ID", "DRUG_NAME", "PUTATIVE_TARGET", "PATHWAY_NAME"]].drop_duplicates("DRUG_ID").copy()
+    else:
+        gdsc_cells = read_source(config, paths, "gdsc_cell_annotations")
+        gdsc_drugs = read_source(config, paths, "gdsc_drug_annotations")
+        gdsc = labels_raw.merge(gdsc_cells, on="SANGER_MODEL_ID", how="left")
+        gdsc = gdsc.merge(gdsc_drugs, on="DRUG_ID", how="left")
     gdsc = gdsc[gdsc["TCGA_DESC"].isin(config["tcga_codes"])].copy()
-    gdsc = gdsc.merge(gdsc_drugs, on="DRUG_ID", how="left")
-    gdsc = gdsc.rename(
-        columns={
-            "CELL_LINE_NAME": "cell_line_name",
-            "DRUG_NAME": "drug_name",
-            "PUTATIVE_TARGET_NORMALIZED": "putative_target",
-            "PATHWAY_NAME_NORMALIZED": "pathway_name",
-        }
-    )
+    gdsc = gdsc.rename(columns=canonical_gdsc_column_map(gdsc.columns))
     gdsc["cell_line_name"] = gdsc["cell_line_name"].fillna(gdsc["SANGER_MODEL_ID"]).astype(str)
     gdsc["drug_name"] = gdsc["drug_name"].fillna("").astype(str)
 
@@ -423,7 +420,9 @@ def build_drug_master(labels: pd.DataFrame, gdsc_drugs: pd.DataFrame, smiles: pd
         columns={
             "DRUG_NAME": "drug_name",
             "PUTATIVE_TARGET_NORMALIZED": "putative_target",
+            "PUTATIVE_TARGET": "putative_target",
             "PATHWAY_NAME_NORMALIZED": "pathway_name",
+            "PATHWAY_NAME": "pathway_name",
         }
     ).copy()
     label_drugs = labels[["DRUG_ID", "drug_name", "putative_target", "pathway_name"]].drop_duplicates("DRUG_ID")
@@ -476,6 +475,8 @@ def build_drug_target_mapping(drugs: pd.DataFrame) -> pd.DataFrame:
 
 def build_sample_crispr(config: dict[str, Any], paths: RunPaths, cells: pd.DataFrame) -> pd.DataFrame:
     crispr = read_source(config, paths, "depmap_crispr_gene_effect")
+    if "ModelID" not in crispr.columns and "Unnamed: 0" in crispr.columns:
+        crispr = crispr.rename(columns={"Unnamed: 0": "ModelID"})
     crispr["ModelID"] = crispr["ModelID"].astype(str)
     model_ids = cells["model_id"].astype(str).tolist()
     sub = crispr[crispr["ModelID"].isin(set(model_ids))].copy()
@@ -974,6 +975,8 @@ def read_source(config: dict[str, Any], paths: RunPaths, key: str) -> pd.DataFra
     path = paths.raw_cache / rel
     if not path.exists():
         raise FileNotFoundError(f"Missing source {key}: {path}")
+    if path.suffix in {".xlsx", ".xls"}:
+        return pd.read_excel(path)
     if path.suffix == ".csv":
         return pd.read_csv(path)
     if path.suffix == ".json":
@@ -1486,6 +1489,23 @@ def parse_gene_symbol(column: str) -> str:
 def clean_feature_token(value: Any) -> str:
     token = re.sub(r"[^A-Za-z0-9]+", "_", str(value).strip().lower()).strip("_")
     return token or "unknown"
+
+
+def canonical_gdsc_column_map(columns: Any) -> dict[str, str]:
+    cols = set(columns)
+    mapping = {
+        "CELL_LINE_NAME": "cell_line_name",
+        "DRUG_NAME": "drug_name",
+    }
+    if "PUTATIVE_TARGET_NORMALIZED" in cols:
+        mapping["PUTATIVE_TARGET_NORMALIZED"] = "putative_target"
+    elif "PUTATIVE_TARGET" in cols:
+        mapping["PUTATIVE_TARGET"] = "putative_target"
+    if "PATHWAY_NAME_NORMALIZED" in cols:
+        mapping["PATHWAY_NAME_NORMALIZED"] = "pathway_name"
+    elif "PATHWAY_NAME" in cols:
+        mapping["PATHWAY_NAME"] = "pathway_name"
+    return mapping
 
 
 def norm_key(value: Any) -> str:

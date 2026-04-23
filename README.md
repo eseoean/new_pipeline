@@ -20,6 +20,15 @@ python3 scripts/run_hybrid_pipeline.py \
   --upload-s3
 ```
 
+`configs/paad.json`은 `PAAD_raw/`에 이미 놓여 있던 staged parquet/CSV를 사용하는 빠른 재현용 설정입니다. 진짜 원천 파일에서 core input을 다시 검증하려면 아래 설정을 사용합니다.
+
+```bash
+python3 scripts/run_hybrid_pipeline.py \
+  --config configs/paad_original_core.json \
+  --stage all \
+  --upload-s3
+```
+
 중간부터 다시 실행할 때는 `--stage build`, `--stage train`, `--stage report`, `--stage upload` 중 하나를 사용합니다.
 
 ## Pipeline Layout
@@ -27,8 +36,10 @@ python3 scripts/run_hybrid_pipeline.py \
 ```text
 configs/
   paad.json
+  paad_original_core.json
 docs/
   hybrid_pipeline_design.md
+  paad_original_source_audit.md
 scripts/
   run_hybrid_pipeline.py
 data/
@@ -56,4 +67,3 @@ outputs/
 - `weighted_top3_ensemble`
 
 Random CV는 가까운 분포 내 예측력을, drug/scaffold split은 새로운 약물/새로운 화학 구조에 대한 일반화 가능성을 보기 위한 기준입니다.
-
