@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import math
 import re
 import subprocess
 import warnings
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
 
+import h5py
 import numpy as np
 import pandas as pd
 import torch
@@ -236,17 +240,17 @@ def expand_stage(stage: str) -> list[str]:
 
 def write_source_inventory(config: dict[str, Any], paths: RunPaths) -> None:
     inventory_path = paths.step1 / "raw_s3_inventory.txt"
-    if not inventory_path.exists():
+    if config.get("s3_raw_prefix") and not inventory_path.exists():
         cmd = ["aws", "s3", "ls", ensure_s3_slash(config["s3_raw_prefix"]), "--recursive", "--summarize"]
         with inventory_path.open("w", encoding="utf-8") as fh:
             subprocess.run(cmd, check=True, stdout=fh)
     manifest = []
-    for key, rel in config["source_files"].items():
+    for key, rel, s3_uri in source_file_specs(config):
         local = paths.raw_cache / rel
         manifest.append(
             {
                 "source_key": key,
-                "s3_uri": ensure_s3_slash(config["s3_raw_prefix"]) + rel,
+                "s3_uri": s3_uri,
                 "local_path": str(local),
                 "exists_local": local.exists(),
                 "local_size_bytes": local.stat().st_size if local.exists() else None,
@@ -256,18 +260,18 @@ def write_source_inventory(config: dict[str, Any], paths: RunPaths) -> None:
 
 
 def download_sources(config: dict[str, Any], paths: RunPaths) -> None:
-    for _, rel in config["source_files"].items():
+    for _, rel, s3_uri in source_file_specs(config):
         local = paths.raw_cache / rel
         if local.exists():
             continue
         local.parent.mkdir(parents=True, exist_ok=True)
-        run(["aws", "s3", "cp", ensure_s3_slash(config["s3_raw_prefix"]) + rel, str(local), "--only-show-errors"])
+        run(["aws", "s3", "cp", s3_uri, str(local), "--only-show-errors"])
 
 
 def build_all_inputs(config: dict[str, Any], paths: RunPaths) -> None:
     labels, cells, drugs = build_intermediate_tables(config, paths)
     sample_crispr = build_sample_crispr(config, paths, cells)
-    drug_lincs = build_drug_lincs(config, paths)
+    drug_lincs = build_drug_lincs(config, paths, drugs)
     drug_features = build_drug_features(config, paths, drugs, drug_lincs)
     train = build_train_table(config, paths, labels, cells, sample_crispr, drug_features)
     train.to_parquet(paths.step3 / "train_table_full.parquet", index=False)
@@ -281,12 +285,12 @@ def build_intermediate_tables(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     labels_raw = read_source(config, paths, "gdsc_labels")
     depmap = read_source(config, paths, "depmap_model")
-    smiles = read_source(config, paths, "drug_smiles_catalog")
 
-    if config.get("source_tier") == "original_core":
+    if config.get("source_tier") in {"original_core", "raw_only"}:
         gdsc = labels_raw.copy()
         gdsc_drugs = gdsc[["DRUG_ID", "DRUG_NAME", "PUTATIVE_TARGET", "PATHWAY_NAME"]].drop_duplicates("DRUG_ID").copy()
     else:
+        smiles = read_source(config, paths, "drug_smiles_catalog")
         gdsc_cells = read_source(config, paths, "gdsc_cell_annotations")
         gdsc_drugs = read_source(config, paths, "gdsc_drug_annotations")
         gdsc = labels_raw.merge(gdsc_cells, on="SANGER_MODEL_ID", how="left")
@@ -298,6 +302,10 @@ def build_intermediate_tables(
 
     cells = build_cell_metadata(config, gdsc, depmap)
     labels = build_labels(config, gdsc, cells)
+    if config.get("source_tier") == "raw_only":
+        smiles = build_raw_smiles_catalog(config, paths, labels)
+    elif config.get("source_tier") == "original_core":
+        smiles = read_source(config, paths, "drug_smiles_catalog")
     drugs = build_drug_master(labels, gdsc_drugs, smiles)
     target_mapping = build_drug_target_mapping(drugs)
 
@@ -473,6 +481,159 @@ def build_drug_target_mapping(drugs: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
 
 
+def build_raw_smiles_catalog(config: dict[str, Any], paths: RunPaths, labels: pd.DataFrame) -> pd.DataFrame:
+    drugs = labels[["DRUG_ID", "drug_name"]].drop_duplicates("DRUG_ID").copy()
+    candidates: dict[int, list[tuple[str, str]]] = {}
+    for _, row in drugs.iterrows():
+        drug_id = int(row["DRUG_ID"])
+        candidates.setdefault(drug_id, [])
+        candidates[drug_id].append((str(row["drug_name"]), "gdsc_drug_name"))
+
+    if source_key_exists(config, "gdsc_screened_compounds"):
+        screened = read_source(config, paths, "gdsc_screened_compounds")
+        for _, row in screened.iterrows():
+            drug_id_raw = pd.to_numeric(row.get("DRUG_ID"), errors="coerce")
+            if pd.isna(drug_id_raw):
+                continue
+            drug_id = int(drug_id_raw)
+            if drug_id not in candidates:
+                continue
+            candidates[drug_id].append((str(row.get("DRUG_NAME", "")), "gdsc_screened_name"))
+            for synonym in split_synonyms(row.get("SYNONYMS", "")):
+                candidates[drug_id].append((synonym, "gdsc_screened_synonym"))
+
+    wanted_names = {norm_key(name) for names in candidates.values() for name, _ in names if norm_key(name)}
+    lincs_index = build_lincs_smiles_name_index(config, paths, wanted_names)
+    drugbank_index = build_drugbank_smiles_name_index(config, paths, wanted_names)
+    source_indexes = [
+        ("lincs_pert_info", lincs_index),
+        ("drugbank_xml", drugbank_index),
+    ]
+
+    rows = []
+    for _, row in drugs.iterrows():
+        drug_id = int(row["DRUG_ID"])
+        canonical_smiles = ""
+        match_source = "unmatched"
+        matched_name = ""
+        for candidate_name, candidate_source in candidates.get(drug_id, []):
+            key = norm_key(candidate_name)
+            if not key:
+                continue
+            for source_name, index in source_indexes:
+                smiles = index.get(key, "")
+                if smiles:
+                    canonical_smiles = smiles
+                    match_source = f"{source_name}:{candidate_source}"
+                    matched_name = candidate_name
+                    break
+            if canonical_smiles:
+                break
+        rows.append(
+            {
+                "DRUG_ID": drug_id,
+                "DRUG_NAME": str(row["drug_name"]),
+                "canonical_smiles": canonical_smiles,
+                "has_smiles": int(bool(canonical_smiles)),
+                "match_source": match_source,
+                "matched_name": matched_name,
+            }
+        )
+    out = pd.DataFrame(rows).sort_values("DRUG_ID").reset_index(drop=True)
+    out.to_parquet(paths.step2 / "raw_smiles_catalog.parquet", index=False)
+    return out
+
+
+def build_lincs_smiles_name_index(config: dict[str, Any], paths: RunPaths, wanted_names: set[str]) -> dict[str, str]:
+    if not source_key_exists(config, "lincs_pert_info"):
+        return {}
+    pert = read_source(config, paths, "lincs_pert_info")
+    if "pert_type" in pert.columns:
+        pert = pert[pert["pert_type"].astype(str).eq("trt_cp")].copy()
+    out: dict[str, str] = {}
+    for _, row in pert.iterrows():
+        key = norm_key(row.get("pert_iname", ""))
+        if key not in wanted_names:
+            continue
+        smiles = canonicalize_smiles(row.get("canonical_smiles", ""))
+        if smiles and key not in out:
+            out[key] = smiles
+    return out
+
+
+def build_drugbank_smiles_name_index(config: dict[str, Any], paths: RunPaths, wanted_names: set[str]) -> dict[str, str]:
+    if not source_key_exists(config, "drugbank_xml_zip"):
+        return {}
+    zip_path = source_local_path(config, paths, "drugbank_xml_zip")
+    if not zip_path.exists():
+        raise FileNotFoundError(f"Missing DrugBank XML zip: {zip_path}")
+    out: dict[str, str] = {}
+    with zipfile.ZipFile(zip_path) as zf:
+        xml_names = [name for name in zf.namelist() if name.lower().endswith(".xml")]
+        if not xml_names:
+            return {}
+        with zf.open(xml_names[0]) as fh:
+            for _, elem in ET.iterparse(fh, events=("end",)):
+                if local_xml_name(elem.tag) != "drug":
+                    continue
+                names = extract_drugbank_names(elem)
+                keys = [norm_key(name) for name in names]
+                matched_keys = [key for key in keys if key in wanted_names]
+                if matched_keys:
+                    smiles = canonicalize_smiles(extract_drugbank_smiles(elem))
+                    if smiles:
+                        for key in matched_keys:
+                            out.setdefault(key, smiles)
+                elem.clear()
+    return out
+
+
+def extract_drugbank_names(elem: ET.Element) -> list[str]:
+    names: list[str] = []
+    primary = direct_child_text(elem, "name")
+    if primary:
+        names.append(primary)
+    for child in elem:
+        if local_xml_name(child.tag) != "synonyms":
+            continue
+        for synonym in child:
+            if local_xml_name(synonym.tag) == "synonym" and synonym.text:
+                names.append(synonym.text)
+    return names
+
+
+def extract_drugbank_smiles(elem: ET.Element) -> str:
+    for container_name in ["calculated-properties", "experimental-properties"]:
+        for container in elem:
+            if local_xml_name(container.tag) != container_name:
+                continue
+            for prop in container:
+                if local_xml_name(prop.tag) != "property":
+                    continue
+                kind = ""
+                value = ""
+                for child in prop:
+                    child_name = local_xml_name(child.tag)
+                    if child_name == "kind":
+                        kind = str(child.text or "")
+                    elif child_name == "value":
+                        value = str(child.text or "")
+                if kind.strip().lower() == "smiles" and value.strip():
+                    return value
+    return ""
+
+
+def direct_child_text(elem: ET.Element, name: str) -> str:
+    for child in elem:
+        if local_xml_name(child.tag) == name and child.text:
+            return str(child.text)
+    return ""
+
+
+def local_xml_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
 def build_sample_crispr(config: dict[str, Any], paths: RunPaths, cells: pd.DataFrame) -> pd.DataFrame:
     crispr = read_source(config, paths, "depmap_crispr_gene_effect")
     if "ModelID" not in crispr.columns and "Unnamed: 0" in crispr.columns:
@@ -493,7 +654,11 @@ def build_sample_crispr(config: dict[str, Any], paths: RunPaths, cells: pd.DataF
     return out
 
 
-def build_drug_lincs(config: dict[str, Any], paths: RunPaths) -> pd.DataFrame:
+def build_drug_lincs(config: dict[str, Any], paths: RunPaths, drugs: pd.DataFrame | None = None) -> pd.DataFrame:
+    if config.get("source_tier") == "raw_only":
+        if drugs is None:
+            raise ValueError("raw_only LINCS construction requires the drug master table")
+        return build_raw_lincs_features(config, paths, drugs)
     raw = read_source(config, paths, "lincs_pancancer").copy()
     raw["canonical_drug_id"] = raw["canonical_drug_id"].astype(str)
     lincs_cols = [c for c in raw.columns if c != "canonical_drug_id" and pd.api.types.is_numeric_dtype(raw[c])]
@@ -505,6 +670,194 @@ def build_drug_lincs(config: dict[str, Any], paths: RunPaths) -> pd.DataFrame:
     out["drug__has_lincs_signature"] = 1
     out = add_lincs_summary(out, feature_cols)
     out.to_parquet(paths.step2 / "drug_lincs.parquet", index=False)
+    return out
+
+
+def build_raw_lincs_features(config: dict[str, Any], paths: RunPaths, drugs: pd.DataFrame) -> pd.DataFrame:
+    if not all(source_key_exists(config, key) for key in ["lincs_pert_info", "lincs_sig_info", "lincs_gene_info", "lincs_gctx"]):
+        return empty_lincs_features(paths, drugs)
+
+    pert = read_source(config, paths, "lincs_pert_info")
+    sig = read_source(config, paths, "lincs_sig_info")
+    gene = read_source(config, paths, "lincs_gene_info")
+    gctx_path = source_local_path(config, paths, "lincs_gctx")
+    if not gctx_path.exists():
+        raise FileNotFoundError(f"Missing LINCS GCTX source: {gctx_path}")
+
+    drug_to_pert = map_drugs_to_lincs_perturbagens(drugs, pert)
+    matched_pert_ids = sorted({pert_id for ids in drug_to_pert.values() for pert_id in ids})
+    if not matched_pert_ids:
+        return empty_lincs_features(paths, drugs)
+
+    sig = sig[sig["pert_id"].astype(str).isin(set(matched_pert_ids))].copy()
+    if "pert_type" in sig.columns:
+        sig = sig[sig["pert_type"].astype(str).eq("trt_cp")].copy()
+    if sig.empty:
+        return empty_lincs_features(paths, drugs)
+
+    matrix, row_ids, col_ids = read_gctx_for_signatures(config, paths, gctx_path, sig["sig_id"].astype(str).tolist(), gene)
+    if matrix.size == 0:
+        return empty_lincs_features(paths, drugs)
+
+    sig_to_pos = {sig_id: idx for idx, sig_id in enumerate(col_ids)}
+    pert_to_positions: dict[str, list[int]] = {}
+    for _, row in sig.iterrows():
+        sig_id = str(row["sig_id"])
+        if sig_id in sig_to_pos:
+            pert_to_positions.setdefault(str(row["pert_id"]), []).append(sig_to_pos[sig_id])
+
+    rows = []
+    feature_names = ["drug__lincs__" + clean_feature_token(symbol) for symbol in row_ids]
+    for _, drug_row in drugs.iterrows():
+        drug_id = str(drug_row["canonical_drug_id"])
+        positions = sorted({pos for pert_id in drug_to_pert.get(drug_id, []) for pos in pert_to_positions.get(pert_id, [])})
+        if positions:
+            values = matrix[:, positions].mean(axis=1).astype(np.float32)
+            has_signature = 1
+        else:
+            values = np.zeros((len(feature_names),), dtype=np.float32)
+            has_signature = 0
+        row = {"canonical_drug_id": drug_id, "drug__has_lincs_signature": has_signature}
+        row.update({name: float(value) for name, value in zip(feature_names, values)})
+        rows.append(row)
+
+    out = pd.DataFrame(rows)
+    lincs_cols = [c for c in out.columns if c.startswith("drug__lincs__")]
+    keep = select_top_variance_columns(out, lincs_cols, int(config["feature_limits"].get("legacy_lincs", 768)))
+    out = out[["canonical_drug_id", "drug__has_lincs_signature"] + keep].copy()
+    out = add_lincs_summary(out, keep)
+    out.to_parquet(paths.step2 / "drug_lincs.parquet", index=False)
+    write_json(
+        paths.step2 / "raw_lincs_build_summary.json",
+        {
+            "matched_drugs": int(out["drug__has_lincs_signature"].sum()),
+            "matched_perturbagens": int(len(matched_pert_ids)),
+            "matched_signatures": int(len(col_ids)),
+            "selected_gene_features": int(len(keep)),
+            "source": str(gctx_path),
+        },
+    )
+    return out
+
+
+def empty_lincs_features(paths: RunPaths, drugs: pd.DataFrame) -> pd.DataFrame:
+    out = drugs[["canonical_drug_id"]].copy()
+    out["drug__has_lincs_signature"] = 0
+    out = add_lincs_summary(out, [])
+    out.to_parquet(paths.step2 / "drug_lincs.parquet", index=False)
+    return out
+
+
+def map_drugs_to_lincs_perturbagens(drugs: pd.DataFrame, pert: pd.DataFrame) -> dict[str, list[str]]:
+    pert = pert.copy()
+    if "pert_type" in pert.columns:
+        pert = pert[pert["pert_type"].astype(str).eq("trt_cp")].copy()
+    pert["smiles_canonical_raw"] = pert["canonical_smiles"].map(canonicalize_smiles) if "canonical_smiles" in pert.columns else ""
+    pert["pert_name_norm"] = pert["pert_iname"].map(norm_key) if "pert_iname" in pert.columns else ""
+    by_smiles: dict[str, set[str]] = {}
+    by_name: dict[str, set[str]] = {}
+    for _, row in pert.iterrows():
+        pert_id = str(row.get("pert_id", ""))
+        smiles = str(row.get("smiles_canonical_raw", ""))
+        name_key = str(row.get("pert_name_norm", ""))
+        if smiles:
+            by_smiles.setdefault(smiles, set()).add(pert_id)
+        if name_key:
+            by_name.setdefault(name_key, set()).add(pert_id)
+
+    out: dict[str, list[str]] = {}
+    for _, row in drugs.iterrows():
+        drug_id = str(row["canonical_drug_id"])
+        smiles = canonicalize_smiles(row.get("canonical_smiles", ""))
+        name_key = norm_key(row.get("drug_name", ""))
+        matches = set()
+        if smiles:
+            matches.update(by_smiles.get(smiles, set()))
+        if name_key:
+            matches.update(by_name.get(name_key, set()))
+        out[drug_id] = sorted(matches)
+    return out
+
+
+def read_gctx_for_signatures(
+    config: dict[str, Any],
+    paths: RunPaths,
+    gctx_path: Path,
+    sig_ids: list[str],
+    gene: pd.DataFrame,
+) -> tuple[np.ndarray, list[str], list[str]]:
+    h5_path = ensure_hdf5_gctx(config, paths, gctx_path)
+    with h5py.File(h5_path, "r") as h5:
+        row_ids = decode_h5_values(h5["0/META/ROW/id"][()])
+        col_ids = decode_h5_values(h5["0/META/COL/id"][()])
+        matrix_ds = h5["0/DATA/0/matrix"]
+        gene_ids = select_lincs_gene_ids(config, gene, row_ids)
+        row_lookup = {value: idx for idx, value in enumerate(row_ids)}
+        col_lookup = {value: idx for idx, value in enumerate(col_ids)}
+        row_idx = sorted(row_lookup[gene_id] for gene_id in gene_ids if gene_id in row_lookup)
+        col_idx = sorted(col_lookup[sig_id] for sig_id in set(sig_ids) if sig_id in col_lookup)
+        if not row_idx or not col_idx:
+            return np.zeros((0, 0), dtype=np.float32), [], []
+        if matrix_ds.shape == (len(row_ids), len(col_ids)):
+            sub = np.asarray(matrix_ds[row_idx, :], dtype=np.float32)[:, col_idx]
+        elif matrix_ds.shape == (len(col_ids), len(row_ids)):
+            sub = np.asarray(matrix_ds[col_idx, :], dtype=np.float32)[:, row_idx].T
+        else:
+            raise ValueError(f"Unexpected GCTX matrix shape: {matrix_ds.shape}")
+        selected_row_ids = [row_ids[i] for i in row_idx]
+        selected_col_ids = [col_ids[i] for i in col_idx]
+    gene_symbol_map = build_lincs_gene_symbol_map(gene)
+    row_symbols = [gene_symbol_map.get(row_id, row_id) for row_id in selected_row_ids]
+    return np.nan_to_num(sub, nan=0.0, posinf=0.0, neginf=0.0), row_symbols, selected_col_ids
+
+
+def ensure_hdf5_gctx(config: dict[str, Any], paths: RunPaths, path: Path) -> Path:
+    if h5py.is_hdf5(str(path)):
+        return path
+    if path.suffix != ".gz":
+        raise ValueError(f"LINCS source is not HDF5 and is not gzip-compressed: {path}")
+    out = paths.raw_cache / "raw_only_work" / path.name[:-3]
+    if out.exists() and h5py.is_hdf5(str(out)):
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "rb") as src, out.open("wb") as dst:
+        while True:
+            chunk = src.read(16 * 1024 * 1024)
+            if not chunk:
+                break
+            dst.write(chunk)
+    if not h5py.is_hdf5(str(out)):
+        raise ValueError(f"Decompressed LINCS file is not HDF5: {out}")
+    return out
+
+
+def decode_h5_values(values: Any) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        if isinstance(value, bytes):
+            out.append(value.decode("utf-8"))
+        else:
+            out.append(str(value))
+    return out
+
+
+def select_lincs_gene_ids(config: dict[str, Any], gene: pd.DataFrame, row_ids: list[str]) -> list[str]:
+    gene = gene.copy()
+    gene["pr_gene_id"] = gene["pr_gene_id"].astype(str)
+    if "pr_is_lm" in gene.columns:
+        gene = gene[pd.to_numeric(gene["pr_is_lm"], errors="coerce").fillna(0).astype(int).eq(1)].copy()
+    row_id_set = set(row_ids)
+    gene = gene[gene["pr_gene_id"].isin(row_id_set)].copy()
+    limit = int(config["feature_limits"].get("raw_lincs_genes", 978))
+    return gene["pr_gene_id"].astype(str).head(limit).tolist()
+
+
+def build_lincs_gene_symbol_map(gene: pd.DataFrame) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if "pr_gene_id" not in gene.columns or "pr_gene_symbol" not in gene.columns:
+        return out
+    for _, row in gene.iterrows():
+        out[str(row["pr_gene_id"])] = str(row["pr_gene_symbol"])
     return out
 
 
@@ -971,14 +1324,17 @@ def upload_outputs(config: dict[str, Any], paths: RunPaths) -> None:
 
 
 def read_source(config: dict[str, Any], paths: RunPaths, key: str) -> pd.DataFrame:
-    rel = config["source_files"][key]
-    path = paths.raw_cache / rel
+    path = source_local_path(config, paths, key)
     if not path.exists():
         raise FileNotFoundError(f"Missing source {key}: {path}")
     if path.suffix in {".xlsx", ".xls"}:
         return pd.read_excel(path)
     if path.suffix == ".csv":
         return pd.read_csv(path)
+    if path.suffix == ".gz" and path.name.endswith(".txt.gz"):
+        return pd.read_csv(path, sep="\t", compression="gzip")
+    if path.suffix == ".txt":
+        return pd.read_csv(path, sep="\t")
     if path.suffix == ".json":
         return pd.read_json(path)
     return pd.read_parquet(path)
@@ -1512,8 +1868,49 @@ def norm_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 
 
+def split_synonyms(value: Any) -> list[str]:
+    text = str(value or "")
+    if not text or text.lower() == "nan":
+        return []
+    return [item.strip() for item in re.split(r"[,;|]", text) if item.strip()]
+
+
+def canonicalize_smiles(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"nan", "none", "-666"}:
+        return ""
+    mol = mol_from_smiles(text)
+    if mol is None:
+        return ""
+    return Chem.MolToSmiles(mol, canonical=True)
+
+
 def ensure_s3_slash(prefix: str) -> str:
     return prefix if prefix.endswith("/") else prefix + "/"
+
+
+def source_key_exists(config: dict[str, Any], key: str) -> bool:
+    return key in config.get("source_files", {})
+
+
+def source_file_specs(config: dict[str, Any]) -> list[tuple[str, str, str]]:
+    specs: list[tuple[str, str, str]] = []
+    for key, spec in config.get("source_files", {}).items():
+        if isinstance(spec, str):
+            rel = spec
+            s3_uri = ensure_s3_slash(config.get("s3_raw_prefix", "")) + rel
+        else:
+            rel = str(spec.get("local") or spec.get("path") or Path(str(spec["s3_uri"])).name)
+            s3_uri = str(spec.get("s3_uri") or ensure_s3_slash(config.get("s3_raw_prefix", "")) + str(spec["path"]))
+        specs.append((key, rel, s3_uri))
+    return specs
+
+
+def source_local_path(config: dict[str, Any], paths: RunPaths, key: str) -> Path:
+    for source_key, rel, _ in source_file_specs(config):
+        if source_key == key:
+            return paths.raw_cache / rel
+    raise KeyError(f"Unknown source file key: {key}")
 
 
 def run(cmd: list[str]) -> None:

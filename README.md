@@ -29,6 +29,15 @@ python3 scripts/run_hybrid_pipeline.py \
   --upload-s3
 ```
 
+가공된 bridge parquet를 하나도 입력으로 쓰지 않는 엄격한 원천-only 실행은 아래 설정을 사용합니다.
+
+```bash
+python3 scripts/run_hybrid_pipeline.py \
+  --config configs/paad_raw_only.json \
+  --stage all \
+  --upload-s3
+```
+
 중간부터 다시 실행할 때는 `--stage build`, `--stage train`, `--stage report`, `--stage upload` 중 하나를 사용합니다.
 
 ## Pipeline Layout
@@ -37,9 +46,11 @@ python3 scripts/run_hybrid_pipeline.py \
 configs/
   paad.json
   paad_original_core.json
+  paad_raw_only.json
 docs/
   hybrid_pipeline_design.md
   paad_original_source_audit.md
+  paad_raw_only_run.md
 scripts/
   run_hybrid_pipeline.py
 data/

@@ -12,6 +12,8 @@ That was useful for reproducing the model quickly, but it was not a pure "origin
 
 For that reason, this repository now includes `configs/paad_original_core.json` and pipeline support for an `original_core` source tier.
 
+Important correction: `original_core` still allows curated bridge tables for SMILES/LINCS. The strict no-processed-input run is documented separately in `docs/paad_raw_only_run.md` and implemented by `configs/paad_raw_only.json`.
+
 ## S3 Source Finding
 
 The expected prefix:

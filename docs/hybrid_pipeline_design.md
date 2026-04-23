@@ -38,8 +38,9 @@ The pipeline can run with two source tiers.
 |---|---|
 | staged | Fast reproduction from already curated raw-folder parquet/CSV files |
 | original_core | Rebuild core labels, cell mapping, and CRISPR features from original source files, while documenting any remaining curated bridges |
+| raw_only | Use only unprocessed source files as inputs, then generate every bridge/intermediate table inside this pipeline run |
 
-For PAAD, `configs/paad.json` is the staged reproduction config, and `configs/paad_original_core.json` is the original-core validation config. The original-core run is meant to answer a stricter provenance question: can the model input be reproduced from unprocessed GDSC and DepMap source files, not only from prebuilt parquet tables?
+For PAAD, `configs/paad.json` is the staged reproduction config, `configs/paad_original_core.json` is the original-core validation config, and `configs/paad_raw_only.json` is the strict raw-only config. Raw-only is the correct mode when the rule is "do not use any previously processed bridge parquet as input."
 
 ## Canonical Intermediate Tables
 
