@@ -1,0 +1,11 @@
+{
+  "extends": "brca_raw_lincs_cmap2020_all.json",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_BRCA_V2/raw_lincs_cmap2020_mcf7",
+  "run_id": "260423_BRCA_V2_raw_lincs_cmap2020_mcf7",
+  "lincs": {
+    "mode": "raw",
+    "cell_filter": "explicit",
+    "allowed_cell_ids": ["MCF7"],
+    "description": "Use only LINCS2020 trt_cp signatures from the canonical BRCA MCF7 cell line."
+  }
+}

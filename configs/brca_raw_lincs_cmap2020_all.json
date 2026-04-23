@@ -1,0 +1,93 @@
+{
+  "cancer_id": "BRCA",
+  "english_name": "Breast invasive carcinoma",
+  "korean_name": "유방암",
+  "tcga_codes": ["BRCA"],
+  "source_tier": "raw_only",
+  "s3_raw_prefix": "s3://say2-4team/oringinal_raw",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_BRCA_V2/raw_lincs_cmap2020_all",
+  "run_id": "260423_BRCA_V2_raw_lincs_cmap2020_all",
+  "label": {
+    "regression_column": "LN_IC50",
+    "binary_quantile": 0.3,
+    "sensitive_direction": "lower"
+  },
+  "source_files": {
+    "gdsc_labels": {
+      "s3_uri": "s3://say2-4team/oringinal_raw/gdsc/GDSC2-dataset.local.csv",
+      "local": "original_sources/gdsc/GDSC2-dataset.local.csv"
+    },
+    "gdsc_cell_line_details": {
+      "s3_uri": "s3://say2-4team/oringinal_raw/gdsc/Cell_Lines_Details.xlsx",
+      "local": "original_sources/gdsc/Cell_Lines_Details.xlsx"
+    },
+    "gdsc_screened_compounds": {
+      "s3_uri": "s3://say2-4team/oringinal_raw/gdsc/screened_compounds_rel_8.5.csv",
+      "local": "original_sources/gdsc/screened_compounds_rel_8.5.csv"
+    },
+    "depmap_model": {
+      "s3_uri": "s3://say2-4team/oringinal_raw/depmap/Model.csv",
+      "local": "original_sources/depmap/Model.csv"
+    },
+    "depmap_crispr_gene_effect": {
+      "s3_uri": "s3://say2-4team/oringinal_raw/depmap/CRISPRGeneEffect.csv",
+      "local": "original_sources/depmap/CRISPRGeneEffect.csv"
+    },
+    "drugbank_xml_zip": {
+      "s3_uri": "s3://say2-4team/oringinal_raw/drugbank/drugbank_all_full_database.xml.zip",
+      "local": "original_sources/drugbank/drugbank_all_full_database.xml.zip"
+    },
+    "lincs_gctx": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/level5_beta_trt_cp_n720216x12328.gctx",
+      "local": "external_lincs/LINCS2020/level5_beta_trt_cp_n720216x12328.gctx"
+    },
+    "lincs_cell_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/cellinfo_beta.txt",
+      "local": "external_lincs/LINCS2020/cellinfo_beta.txt"
+    },
+    "lincs_gene_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/geneinfo_beta.txt",
+      "local": "external_lincs/LINCS2020/geneinfo_beta.txt"
+    },
+    "lincs_pert_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/compoundinfo_beta.txt",
+      "local": "external_lincs/LINCS2020/compoundinfo_beta.txt"
+    },
+    "lincs_sig_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/siginfo_beta.txt",
+      "local": "external_lincs/LINCS2020/siginfo_beta.txt"
+    }
+  },
+  "feature_limits": {
+    "full_crispr": 3500,
+    "legacy_crispr": 3000,
+    "compact_crispr": 5000,
+    "legacy_lincs": 768,
+    "raw_lincs_genes": 978,
+    "legacy_morgan": 1100,
+    "compact_morgan": 1024,
+    "smiles_svd": 64
+  },
+  "lincs": {
+    "mode": "raw",
+    "cell_filter": "all",
+    "description": "Use all matched raw LINCS2020 trt_cp signatures regardless of LINCS cell_iname."
+  },
+  "lincs_policy": {
+    "representative_cell_lines": ["MCF7"],
+    "single_cell_main_min_mapped_drugs": 80,
+    "single_cell_main_min_signatures": 5000
+  },
+  "variants": [
+    "legacy_rich_valid_smiles_only",
+    "legacy_rich_all_drugs_zero_smiles",
+    "colonstyle_compact_baseline"
+  ],
+  "benchmark": {
+    "folds": 4,
+    "models": ["lightgbm", "xgboost", "extratrees", "randomforest", "residual_mlp", "flat_mlp"],
+    "tree_estimators": 120,
+    "mlp_epochs": 10,
+    "random_state": 42
+  }
+}
