@@ -1,10 +1,5 @@
-lincs_condition,run_id,split,variant,model,spearman,pearson,rmse,auroc,lincs_mapped_drugs,valid_smiles_drugs,lincs_signatures,cell_filter,allowed_cell_ids
-all_cell_lincs,260423_PAAD_V2_raw_only,drug_group_4fold,legacy_rich_valid_smiles_only,weighted_top3_ensemble,0.7122775228817722,0.7489565603432199,2.0121563778013893,0.8602250735447549,120,160,17978,all,
-all_cell_lincs,260423_PAAD_V2_raw_only,random_4fold,legacy_rich_valid_smiles_only,lightgbm,0.9126542420587028,0.9355625636855244,1.0664941101770025,0.9622730239066484,120,160,17978,all,
-all_cell_lincs,260423_PAAD_V2_raw_only,scaffold_group_4fold,legacy_rich_valid_smiles_only,weighted_top3_ensemble,0.7060637634478363,0.7406011342518817,2.0374460646154637,0.8602159955238964,120,160,17978,all,
-yapc_only_lincs,260423_PAAD_V2_raw_lincs_yapc_only,drug_group_4fold,legacy_rich_valid_smiles_only,weighted_top3_ensemble,0.6409766872554439,0.6954960774179204,2.1689210192175645,0.8253742957501564,85,160,1147,explicit,YAPC
-yapc_only_lincs,260423_PAAD_V2_raw_lincs_yapc_only,random_4fold,legacy_rich_valid_smiles_only,lightgbm,0.9110021673903512,0.9336780590014202,1.0816689445890904,0.9616508598292208,85,160,1147,explicit,YAPC
-yapc_only_lincs,260423_PAAD_V2_raw_lincs_yapc_only,scaffold_group_4fold,legacy_rich_valid_smiles_only,randomforest,0.6298134019846726,0.6708092089625827,2.2592829895278768,0.8225327473620038,85,160,1147,explicit,YAPC
-no_lincs,260423_PAAD_V2_raw_no_lincs,drug_group_4fold,legacy_rich_valid_smiles_only,weighted_top3_ensemble,0.4988797633374033,0.5226007725810171,2.5751110608492223,0.7382833436984726,0,160,0,none,
-no_lincs,260423_PAAD_V2_raw_no_lincs,random_4fold,legacy_rich_valid_smiles_only,lightgbm,0.9106518808763724,0.9348313583049278,1.0750322070952638,0.9614296629829509,0,160,0,none,
-no_lincs,260423_PAAD_V2_raw_no_lincs,scaffold_group_4fold,legacy_rich_all_drugs_zero_smiles,weighted_top3_ensemble,0.4633882549324007,0.4910623174601522,2.3295908160138663,0.7160787279270944,0,160,0,none,
+lincs_condition,source,cell_filter,lincs_drugs,lincs_signatures,best_random_spearman,best_drug_group_spearman,best_scaffold_spearman
+all_cell_lincs,GSE70138,all,120,17978,0.9126542420587028,0.7122775228817722,0.7060637634478363
+gse70138_yapc_only,GSE70138,explicit (YAPC),85,1147,0.9110021673903512,0.6409766872554439,0.6298134019846726
+cmap2020_yapc_only,CMap/LINCS2020,explicit (YAPC),116,2568,0.9052430530868688,0.6886517158135038,0.6529549740564397
+no_lincs,none,none,0,0,0.9106518808763724,0.4988797633374033,0.4633882549324007

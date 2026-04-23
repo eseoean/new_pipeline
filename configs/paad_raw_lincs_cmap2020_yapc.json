@@ -1,0 +1,33 @@
+{
+  "extends": "paad_raw_only.json",
+  "run_id": "260423_PAAD_V2_raw_lincs_cmap2020_yapc",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_PAAD_V2/raw_lincs_cmap2020_yapc",
+  "source_files": {
+    "lincs_gctx": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/level5_beta_trt_cp_n720216x12328.gctx",
+      "local": "external_lincs/LINCS2020/level5_beta_trt_cp_n720216x12328.gctx"
+    },
+    "lincs_cell_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/cellinfo_beta.txt",
+      "local": "external_lincs/LINCS2020/cellinfo_beta.txt"
+    },
+    "lincs_gene_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/geneinfo_beta.txt",
+      "local": "external_lincs/LINCS2020/geneinfo_beta.txt"
+    },
+    "lincs_pert_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/compoundinfo_beta.txt",
+      "local": "external_lincs/LINCS2020/compoundinfo_beta.txt"
+    },
+    "lincs_sig_info": {
+      "s3_uri": "s3://say2-4team/PAAD_raw/external_lincs/LINCS2020/siginfo_beta.txt",
+      "local": "external_lincs/LINCS2020/siginfo_beta.txt"
+    }
+  },
+  "lincs": {
+    "mode": "raw",
+    "cell_filter": "explicit",
+    "allowed_cell_ids": ["YAPC"],
+    "description": "External CMap/LINCS2020 raw Level5 trt_cp source filtered to the PAAD-overlap pancreatic cell line YAPC."
+  }
+}

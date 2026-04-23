@@ -555,14 +555,20 @@ def build_lincs_smiles_name_index(config: dict[str, Any], paths: RunPaths, wante
     pert = read_source(config, paths, "lincs_pert_info")
     if "pert_type" in pert.columns:
         pert = pert[pert["pert_type"].astype(str).eq("trt_cp")].copy()
+    smiles_col = first_existing_column(pert, ["canonical_smiles", "smiles"])
+    if smiles_col is None:
+        return {}
+    name_cols = [col for col in ["pert_iname", "cmap_name", "pert_name"] if col in pert.columns]
+    alias_cols = [col for col in ["compound_aliases", "pert_alias", "alias"] if col in pert.columns]
     out: dict[str, str] = {}
     for _, row in pert.iterrows():
-        key = norm_key(row.get("pert_iname", ""))
-        if key not in wanted_names:
+        smiles = canonicalize_smiles(row.get(smiles_col, ""))
+        if not smiles:
             continue
-        smiles = canonicalize_smiles(row.get("canonical_smiles", ""))
-        if smiles and key not in out:
-            out[key] = smiles
+        for name in iter_lincs_names(row, name_cols, alias_cols):
+            key = norm_key(name)
+            if key in wanted_names and key not in out:
+                out[key] = smiles
     return out
 
 
@@ -793,29 +799,32 @@ def filter_lincs_signatures_by_cell(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     lincs_cfg = config.get("lincs", {})
     policy = str(lincs_cfg.get("cell_filter", "all"))
+    cell_col = first_existing_column(sig, ["cell_id", "cell_iname"])
     if policy in {"all", "none", ""}:
         return sig, {
             "cell_filter": "all",
+            "cell_column": cell_col or "",
             "allowed_cell_ids": [],
             "signatures_after_cell_filter": int(len(sig)),
             "perturbagens_after_cell_filter": int(sig["pert_id"].astype(str).nunique()) if "pert_id" in sig.columns else 0,
         }
-    if "cell_id" not in sig.columns:
-        raise ValueError("LINCS cell filtering requested, but sig_info has no cell_id column")
+    if cell_col is None:
+        raise ValueError("LINCS cell filtering requested, but sig_info has no cell_id/cell_iname column")
     if policy == "explicit":
         allowed = [str(value) for value in lincs_cfg.get("allowed_cell_ids", [])]
     elif policy == "cancer_overlap":
         if cells is None:
             raise ValueError("cancer_overlap LINCS cell filtering requires cell metadata")
         paad_names = {norm_key(value): str(value) for value in cells["cell_line_name"].astype(str)}
-        lincs_names = {norm_key(value): str(value) for value in sig["cell_id"].astype(str).unique()}
+        lincs_names = {norm_key(value): str(value) for value in sig[cell_col].astype(str).unique()}
         allowed = sorted(lincs_names[key] for key in paad_names.keys() & lincs_names.keys())
     else:
         raise ValueError(f"Unknown LINCS cell filter policy: {policy}")
     allowed_set = set(allowed)
-    filtered = sig[sig["cell_id"].astype(str).isin(allowed_set)].copy()
+    filtered = sig[sig[cell_col].astype(str).isin(allowed_set)].copy()
     return filtered, {
         "cell_filter": policy,
+        "cell_column": cell_col,
         "allowed_cell_ids": allowed,
         "signatures_after_cell_filter": int(len(filtered)),
         "perturbagens_after_cell_filter": int(filtered["pert_id"].astype(str).nunique()) if "pert_id" in filtered.columns else 0,
@@ -834,18 +843,21 @@ def map_drugs_to_lincs_perturbagens(drugs: pd.DataFrame, pert: pd.DataFrame) -> 
     pert = pert.copy()
     if "pert_type" in pert.columns:
         pert = pert[pert["pert_type"].astype(str).eq("trt_cp")].copy()
-    pert["smiles_canonical_raw"] = pert["canonical_smiles"].map(canonicalize_smiles) if "canonical_smiles" in pert.columns else ""
-    pert["pert_name_norm"] = pert["pert_iname"].map(norm_key) if "pert_iname" in pert.columns else ""
+    smiles_col = first_existing_column(pert, ["canonical_smiles", "smiles"])
+    name_cols = [col for col in ["pert_iname", "cmap_name", "pert_name"] if col in pert.columns]
+    alias_cols = [col for col in ["compound_aliases", "pert_alias", "alias"] if col in pert.columns]
+    pert["smiles_canonical_raw"] = pert[smiles_col].map(canonicalize_smiles) if smiles_col else ""
     by_smiles: dict[str, set[str]] = {}
     by_name: dict[str, set[str]] = {}
     for _, row in pert.iterrows():
         pert_id = str(row.get("pert_id", ""))
         smiles = str(row.get("smiles_canonical_raw", ""))
-        name_key = str(row.get("pert_name_norm", ""))
         if smiles:
             by_smiles.setdefault(smiles, set()).add(pert_id)
-        if name_key:
-            by_name.setdefault(name_key, set()).add(pert_id)
+        for name in iter_lincs_names(row, name_cols, alias_cols):
+            name_key = norm_key(name)
+            if name_key:
+                by_name.setdefault(name_key, set()).add(pert_id)
 
     out: dict[str, list[str]] = {}
     for _, row in drugs.iterrows():
@@ -925,21 +937,28 @@ def decode_h5_values(values: Any) -> list[str]:
 
 def select_lincs_gene_ids(config: dict[str, Any], gene: pd.DataFrame, row_ids: list[str]) -> list[str]:
     gene = gene.copy()
-    gene["pr_gene_id"] = gene["pr_gene_id"].astype(str)
+    gene_id_col = first_existing_column(gene, ["pr_gene_id", "gene_id"])
+    if gene_id_col is None:
+        return []
+    gene[gene_id_col] = gene[gene_id_col].astype(str)
     if "pr_is_lm" in gene.columns:
         gene = gene[pd.to_numeric(gene["pr_is_lm"], errors="coerce").fillna(0).astype(int).eq(1)].copy()
+    elif "feature_space" in gene.columns:
+        gene = gene[gene["feature_space"].astype(str).str.lower().eq("landmark")].copy()
     row_id_set = set(row_ids)
-    gene = gene[gene["pr_gene_id"].isin(row_id_set)].copy()
+    gene = gene[gene[gene_id_col].isin(row_id_set)].copy()
     limit = int(config["feature_limits"].get("raw_lincs_genes", 978))
-    return gene["pr_gene_id"].astype(str).head(limit).tolist()
+    return gene[gene_id_col].astype(str).head(limit).tolist()
 
 
 def build_lincs_gene_symbol_map(gene: pd.DataFrame) -> dict[str, str]:
     out: dict[str, str] = {}
-    if "pr_gene_id" not in gene.columns or "pr_gene_symbol" not in gene.columns:
+    gene_id_col = first_existing_column(gene, ["pr_gene_id", "gene_id"])
+    symbol_col = first_existing_column(gene, ["pr_gene_symbol", "gene_symbol"])
+    if gene_id_col is None or symbol_col is None:
         return out
     for _, row in gene.iterrows():
-        out[str(row["pr_gene_id"])] = str(row["pr_gene_symbol"])
+        out[str(row[gene_id_col])] = str(row[symbol_col])
     return out
 
 
@@ -1957,9 +1976,27 @@ def split_synonyms(value: Any) -> list[str]:
     return [item.strip() for item in re.split(r"[,;|]", text) if item.strip()]
 
 
+def first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for column in candidates:
+        if column in df.columns:
+            return column
+    return None
+
+
+def iter_lincs_names(row: pd.Series, name_cols: list[str], alias_cols: list[str]) -> list[str]:
+    names: list[str] = []
+    for column in name_cols:
+        value = row.get(column, "")
+        if pd.notna(value) and str(value).strip():
+            names.append(str(value).strip())
+    for column in alias_cols:
+        names.extend(split_synonyms(row.get(column, "")))
+    return names
+
+
 def canonicalize_smiles(value: Any) -> str:
     text = str(value or "").strip()
-    if not text or text.lower() in {"nan", "none", "-666"}:
+    if not text or text.lower() in {"nan", "none", "-666", "restricted"}:
         return ""
     mol = mol_from_smiles(text)
     if mol is None:
