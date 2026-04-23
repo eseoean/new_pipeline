@@ -205,7 +205,12 @@ def main() -> None:
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if "extends" not in config:
+        return config
+    parent_path = path.parent / str(config.pop("extends"))
+    parent = load_config(parent_path)
+    return deep_update(parent, config)
 
 
 def make_paths(root: Path, config: dict[str, Any]) -> RunPaths:
@@ -271,7 +276,7 @@ def download_sources(config: dict[str, Any], paths: RunPaths) -> None:
 def build_all_inputs(config: dict[str, Any], paths: RunPaths) -> None:
     labels, cells, drugs = build_intermediate_tables(config, paths)
     sample_crispr = build_sample_crispr(config, paths, cells)
-    drug_lincs = build_drug_lincs(config, paths, drugs)
+    drug_lincs = build_drug_lincs(config, paths, drugs, cells)
     drug_features = build_drug_features(config, paths, drugs, drug_lincs)
     train = build_train_table(config, paths, labels, cells, sample_crispr, drug_features)
     train.to_parquet(paths.step3 / "train_table_full.parquet", index=False)
@@ -654,11 +659,16 @@ def build_sample_crispr(config: dict[str, Any], paths: RunPaths, cells: pd.DataF
     return out
 
 
-def build_drug_lincs(config: dict[str, Any], paths: RunPaths, drugs: pd.DataFrame | None = None) -> pd.DataFrame:
+def build_drug_lincs(
+    config: dict[str, Any],
+    paths: RunPaths,
+    drugs: pd.DataFrame | None = None,
+    cells: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     if config.get("source_tier") == "raw_only":
         if drugs is None:
             raise ValueError("raw_only LINCS construction requires the drug master table")
-        return build_raw_lincs_features(config, paths, drugs)
+        return build_raw_lincs_features(config, paths, drugs, cells)
     raw = read_source(config, paths, "lincs_pancancer").copy()
     raw["canonical_drug_id"] = raw["canonical_drug_id"].astype(str)
     lincs_cols = [c for c in raw.columns if c != "canonical_drug_id" and pd.api.types.is_numeric_dtype(raw[c])]
@@ -673,7 +683,28 @@ def build_drug_lincs(config: dict[str, Any], paths: RunPaths, drugs: pd.DataFram
     return out
 
 
-def build_raw_lincs_features(config: dict[str, Any], paths: RunPaths, drugs: pd.DataFrame) -> pd.DataFrame:
+def build_raw_lincs_features(
+    config: dict[str, Any],
+    paths: RunPaths,
+    drugs: pd.DataFrame,
+    cells: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    lincs_cfg = config.get("lincs", {})
+    if lincs_cfg.get("mode", "raw") == "none":
+        write_json(
+            paths.step2 / "raw_lincs_build_summary.json",
+            {
+                "mode": "none",
+                "matched_drugs": 0,
+                "matched_perturbagens": 0,
+                "matched_signatures": 0,
+                "selected_gene_features": 0,
+                "cell_filter": "none",
+                "allowed_cell_ids": [],
+            },
+        )
+        return empty_lincs_features(paths, drugs)
+
     if not all(source_key_exists(config, key) for key in ["lincs_pert_info", "lincs_sig_info", "lincs_gene_info", "lincs_gctx"]):
         return empty_lincs_features(paths, drugs)
 
@@ -692,7 +723,20 @@ def build_raw_lincs_features(config: dict[str, Any], paths: RunPaths, drugs: pd.
     sig = sig[sig["pert_id"].astype(str).isin(set(matched_pert_ids))].copy()
     if "pert_type" in sig.columns:
         sig = sig[sig["pert_type"].astype(str).eq("trt_cp")].copy()
+    sig, cell_filter_info = filter_lincs_signatures_by_cell(config, sig, cells)
     if sig.empty:
+        write_json(
+            paths.step2 / "raw_lincs_build_summary.json",
+            {
+                "mode": "raw",
+                "matched_drugs": 0,
+                "matched_perturbagens": int(len(matched_pert_ids)),
+                "matched_signatures": 0,
+                "selected_gene_features": 0,
+                "source": str(gctx_path),
+                **cell_filter_info,
+            },
+        )
         return empty_lincs_features(paths, drugs)
 
     matrix, row_ids, col_ids = read_gctx_for_signatures(config, paths, gctx_path, sig["sig_id"].astype(str).tolist(), gene)
@@ -730,14 +774,52 @@ def build_raw_lincs_features(config: dict[str, Any], paths: RunPaths, drugs: pd.
     write_json(
         paths.step2 / "raw_lincs_build_summary.json",
         {
+            "mode": "raw",
             "matched_drugs": int(out["drug__has_lincs_signature"].sum()),
             "matched_perturbagens": int(len(matched_pert_ids)),
             "matched_signatures": int(len(col_ids)),
             "selected_gene_features": int(len(keep)),
             "source": str(gctx_path),
+            **cell_filter_info,
         },
     )
     return out
+
+
+def filter_lincs_signatures_by_cell(
+    config: dict[str, Any],
+    sig: pd.DataFrame,
+    cells: pd.DataFrame | None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    lincs_cfg = config.get("lincs", {})
+    policy = str(lincs_cfg.get("cell_filter", "all"))
+    if policy in {"all", "none", ""}:
+        return sig, {
+            "cell_filter": "all",
+            "allowed_cell_ids": [],
+            "signatures_after_cell_filter": int(len(sig)),
+            "perturbagens_after_cell_filter": int(sig["pert_id"].astype(str).nunique()) if "pert_id" in sig.columns else 0,
+        }
+    if "cell_id" not in sig.columns:
+        raise ValueError("LINCS cell filtering requested, but sig_info has no cell_id column")
+    if policy == "explicit":
+        allowed = [str(value) for value in lincs_cfg.get("allowed_cell_ids", [])]
+    elif policy == "cancer_overlap":
+        if cells is None:
+            raise ValueError("cancer_overlap LINCS cell filtering requires cell metadata")
+        paad_names = {norm_key(value): str(value) for value in cells["cell_line_name"].astype(str)}
+        lincs_names = {norm_key(value): str(value) for value in sig["cell_id"].astype(str).unique()}
+        allowed = sorted(lincs_names[key] for key in paad_names.keys() & lincs_names.keys())
+    else:
+        raise ValueError(f"Unknown LINCS cell filter policy: {policy}")
+    allowed_set = set(allowed)
+    filtered = sig[sig["cell_id"].astype(str).isin(allowed_set)].copy()
+    return filtered, {
+        "cell_filter": policy,
+        "allowed_cell_ids": allowed,
+        "signatures_after_cell_filter": int(len(filtered)),
+        "perturbagens_after_cell_filter": int(filtered["pert_id"].astype(str).nunique()) if "pert_id" in filtered.columns else 0,
+    }
 
 
 def empty_lincs_features(paths: RunPaths, drugs: pd.DataFrame) -> pd.DataFrame:
@@ -1911,6 +1993,16 @@ def source_local_path(config: dict[str, Any], paths: RunPaths, key: str) -> Path
         if source_key == key:
             return paths.raw_cache / rel
     raise KeyError(f"Unknown source file key: {key}")
+
+
+def deep_update(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_update(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 def run(cmd: list[str]) -> None:

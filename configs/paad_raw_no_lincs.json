@@ -1,0 +1,10 @@
+{
+  "extends": "paad_raw_only.json",
+  "run_id": "260423_PAAD_V2_raw_no_lincs",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_PAAD_V2/raw_no_lincs",
+  "lincs": {
+    "mode": "none",
+    "cell_filter": "none",
+    "description": "No-LINCS control. All LINCS gene and summary features are removed or constant-zero."
+  }
+}

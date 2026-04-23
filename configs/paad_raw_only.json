@@ -72,6 +72,11 @@
     "compact_morgan": 1024,
     "smiles_svd": 64
   },
+  "lincs": {
+    "mode": "raw",
+    "cell_filter": "all",
+    "description": "Use all matched raw LINCS trt_cp signatures regardless of LINCS cell_id."
+  },
   "variants": [
     "legacy_rich_valid_smiles_only",
     "legacy_rich_all_drugs_zero_smiles",

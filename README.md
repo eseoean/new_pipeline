@@ -38,6 +38,20 @@ python3 scripts/run_hybrid_pipeline.py \
   --upload-s3
 ```
 
+LINCS cell-line 필터 민감도 실험은 아래 설정을 사용합니다.
+
+```bash
+python3 scripts/run_hybrid_pipeline.py \
+  --config configs/paad_raw_lincs_yapc_only.json \
+  --stage all \
+  --upload-s3
+
+python3 scripts/run_hybrid_pipeline.py \
+  --config configs/paad_raw_no_lincs.json \
+  --stage all \
+  --upload-s3
+```
+
 중간부터 다시 실행할 때는 `--stage build`, `--stage train`, `--stage report`, `--stage upload` 중 하나를 사용합니다.
 
 ## Pipeline Layout
@@ -47,10 +61,13 @@ configs/
   paad.json
   paad_original_core.json
   paad_raw_only.json
+  paad_raw_lincs_yapc_only.json
+  paad_raw_no_lincs.json
 docs/
   hybrid_pipeline_design.md
   paad_original_source_audit.md
   paad_raw_only_run.md
+  paad_lincs_filter_experiment.md
 scripts/
   run_hybrid_pipeline.py
 data/

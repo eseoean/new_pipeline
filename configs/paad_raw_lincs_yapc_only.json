@@ -1,0 +1,11 @@
+{
+  "extends": "paad_raw_only.json",
+  "run_id": "260423_PAAD_V2_raw_lincs_yapc_only",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_PAAD_V2/raw_lincs_yapc_only",
+  "lincs": {
+    "mode": "raw",
+    "cell_filter": "explicit",
+    "allowed_cell_ids": ["YAPC"],
+    "description": "PAAD-overlap LINCS filter. Available GSE70138 PAAD overlap is YAPC only."
+  }
+}
