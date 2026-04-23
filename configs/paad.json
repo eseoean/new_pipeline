@@ -1,0 +1,47 @@
+{
+  "cancer_id": "PAAD",
+  "english_name": "Pancreatic adenocarcinoma",
+  "korean_name": "췌장암",
+  "tcga_codes": ["PAAD"],
+  "s3_raw_prefix": "s3://say2-4team/PAAD_raw",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_PAAD_V2",
+  "run_id": "260423_PAAD_V2",
+  "label": {
+    "regression_column": "LN_IC50",
+    "binary_quantile": 0.3,
+    "sensitive_direction": "lower"
+  },
+  "source_files": {
+    "gdsc_labels": "GDSC/gdsc2_label_table_20260406.parquet",
+    "gdsc_drug_annotations": "GDSC/gdsc2_drug_annotation_master_20260406.parquet",
+    "gdsc_cell_annotations": "GDSC/gdsc2_cellline_annotation_table_20260406.parquet",
+    "drug_smiles_catalog": "GDSC/drug_features_catalog_brca_reference_20260420.parquet",
+    "depmap_model": "depmap/depmap_model_basic_clean_20260406.parquet",
+    "depmap_crispr_gene_effect": "depmap/depmap_crispr_gene_effect_matrix_20260406.parquet",
+    "lincs_pancancer": "Linc1000/local_enhancements/lincs_drug_signature_pancancer_20260421.parquet",
+    "lincs_normalized": "Linc1000/processed_lincs_20260406/lincs_drug_signature_normalized.parquet",
+    "raw_manifest": "additional_sources/manifests/paad_raw_source_manifest_20260421.json"
+  },
+  "feature_limits": {
+    "full_crispr": 3500,
+    "legacy_crispr": 3000,
+    "compact_crispr": 5000,
+    "legacy_lincs": 768,
+    "legacy_morgan": 1100,
+    "compact_morgan": 1024,
+    "smiles_svd": 64
+  },
+  "variants": [
+    "legacy_rich_valid_smiles_only",
+    "legacy_rich_all_drugs_zero_smiles",
+    "colonstyle_compact_baseline"
+  ],
+  "benchmark": {
+    "folds": 4,
+    "models": ["lightgbm", "xgboost", "extratrees", "randomforest", "residual_mlp", "flat_mlp"],
+    "tree_estimators": 120,
+    "mlp_epochs": 10,
+    "random_state": 42
+  }
+}
+
