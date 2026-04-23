@@ -119,3 +119,13 @@
 | legacy_rich_valid_smiles_only | 0.5799 |
 | legacy_rich_all_drugs_zero_smiles | 0.5512 |
 | colonstyle_compact_baseline | 0.5245 |
+
+## Extended Metrics For Split Winners
+
+| Split | Variant | Model | Spearman | Pearson | Kendall | RMSE | MAE | R2 | AUROC | AUPRC |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| drug_group_4fold | legacy_rich_valid_smiles_only | weighted_top3_ensemble | 0.5823 | 0.6211 | 0.4188 | 2.1716 | 1.6378 | 0.3852 | 0.7996 | 0.6929 |
+| random_4fold | legacy_rich_valid_smiles_only | lightgbm | 0.8893 | 0.9252 | 0.7227 | 1.0549 | 0.8105 | 0.8549 | 0.9538 | 0.9163 |
+| scaffold_group_4fold | legacy_rich_valid_smiles_only | weighted_top3_ensemble | 0.5775 | 0.5864 | 0.4120 | 2.2475 | 1.6819 | 0.3414 | 0.8010 | 0.6565 |
+
+Binary metrics use `label_binary=1` as sensitive and score `-predicted LN_IC50`.

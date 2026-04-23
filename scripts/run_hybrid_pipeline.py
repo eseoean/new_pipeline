@@ -22,7 +22,7 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 from sklearn.decomposition import TruncatedSVD
 from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import average_precision_score, mean_absolute_error, mean_squared_error, r2_score, roc_auc_score
 from sklearn.model_selection import GroupKFold, KFold
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -775,21 +775,14 @@ def fit_model_cv(
         except ModuleNotFoundError as exc:
             return {"status": "skipped", "reason": str(exc)}, oof
         oof[va] = pred.astype(np.float32)
-        folds.append(
-            {
-                "fold": fold_idx,
-                "n_train": int(len(tr)),
-                "n_valid": int(len(va)),
-                "spearman": metric_spearman(y[va], pred),
-                "rmse": metric_rmse(y[va], pred),
-            }
-        )
+        fold_metrics = regression_metric_bundle(y[va], pred)
+        folds.append({"fold": fold_idx, "n_train": int(len(tr)), "n_valid": int(len(va)), **fold_metrics})
     fold_spearman = [f["spearman"] for f in folds if np.isfinite(f["spearman"])]
+    metrics = regression_metric_bundle(y, oof)
     return (
         {
             "status": "completed",
-            "spearman": metric_spearman(y, oof),
-            "rmse": metric_rmse(y, oof),
+            **metrics,
             "fold_spearman_mean": float(np.mean(fold_spearman)) if fold_spearman else float("nan"),
             "fold_spearman_std": float(np.std(fold_spearman)) if fold_spearman else float("nan"),
             "folds": folds,
@@ -949,9 +942,12 @@ def write_report(config: dict[str, Any], paths: RunPaths) -> None:
                 sections.append("")
     if completed_frames:
         combined = pd.concat(completed_frames, ignore_index=True)
+        combined = enrich_completed_metrics(combined, paths)
         combined.to_csv(paths.reports / "benchmark_completed_all_variants.csv", index=False)
         best = combined.sort_values(["split", "spearman"], ascending=[True, False]).groupby("split").head(8)
         best.to_csv(paths.reports / "benchmark_best_by_split.csv", index=False)
+        extended_best = combined.sort_values(["split", "spearman"], ascending=[True, False]).groupby("split").head(1)
+        extended_best.to_csv(paths.reports / "benchmark_extended_best_by_split.csv", index=False)
         policy = build_policy_comparison(combined)
         if not policy.empty:
             policy.to_csv(paths.reports / "variant_policy_comparison.csv", index=False)
@@ -959,6 +955,7 @@ def write_report(config: dict[str, Any], paths: RunPaths) -> None:
         recommendation = build_variant_recommendation(combined)
         write_json(paths.reports / "variant_recommendation.json", recommendation)
         sections.extend(render_variant_recommendation(recommendation))
+        sections.extend(render_extended_metrics_table(extended_best))
     (paths.reports / "summary.md").write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")
     write_json(paths.reports / "run_index.json", build_index(config, paths))
 
@@ -1137,13 +1134,13 @@ def build_ensemble(
         pred += weight * oof_store[(split, model)]
         members.append({"model": model, "spearman": float(result["spearman"]), "weight": float(weight)})
     save_oof(step_dir, train, y, pred, split, "weighted_top3_ensemble")
+    metrics = regression_metric_bundle(y, pred)
     return {
         "variant": variant,
         "split": split,
         "model": "weighted_top3_ensemble",
         "status": "completed",
-        "spearman": metric_spearman(y, pred),
-        "rmse": metric_rmse(y, pred),
+        **metrics,
         "fold_spearman_mean": np.nan,
         "fold_spearman_std": np.nan,
         "folds": [],
@@ -1205,6 +1202,49 @@ def build_qc_warnings(labels: pd.DataFrame, cells: pd.DataFrame, valid: pd.Serie
     if int(pd.to_numeric(cells["is_depmap_mapped"], errors="coerce").fillna(0).sum()) < cells.shape[0]:
         warnings_out.append("some_cell_lines_missing_depmap_mapping")
     return warnings_out
+
+
+def enrich_completed_metrics(combined: pd.DataFrame, paths: RunPaths) -> pd.DataFrame:
+    """Backfill extended metrics from saved OOF predictions.
+
+    Older benchmark CSVs only contain Spearman and RMSE. The OOF files are the
+    source of truth, so reports can be regenerated without retraining.
+    """
+
+    out = combined.copy()
+    label_cache: dict[str, pd.DataFrame] = {}
+    metric_rows: list[dict[str, Any]] = []
+    for _, row in out.iterrows():
+        if row.get("status") != "completed":
+            metric_rows.append({})
+            continue
+        variant = str(row["variant"])
+        split = str(row["split"])
+        model = str(row["model"])
+        oof_path = paths.step4 / variant / "step5_benchmark" / f"oof_{split}_{model}.parquet"
+        if not oof_path.exists():
+            metric_rows.append({})
+            continue
+        oof = pd.read_parquet(oof_path)
+        y_true = pd.to_numeric(oof["y_true"], errors="coerce").to_numpy(dtype=np.float32)
+        y_pred = pd.to_numeric(oof["y_pred"], errors="coerce").to_numpy(dtype=np.float32)
+        metrics = regression_metric_bundle(y_true, y_pred)
+        metrics["n_eval"] = int(len(oof))
+
+        if variant not in label_cache:
+            label_cache[variant] = pd.read_parquet(
+                paths.step4 / variant / "train_table.parquet",
+                columns=["pair_id", "label_binary"],
+            )
+        binary = oof[["pair_id"]].merge(label_cache[variant], on="pair_id", how="left")["label_binary"]
+        y_binary = pd.to_numeric(binary, errors="coerce").fillna(0).astype(int).to_numpy()
+        metrics.update(binary_metric_bundle(y_binary, -y_pred))
+        metric_rows.append(metrics)
+
+    metrics_df = pd.DataFrame(metric_rows)
+    for column in metrics_df.columns:
+        out[column] = metrics_df[column]
+    return out
 
 
 def build_policy_comparison(combined: pd.DataFrame) -> pd.DataFrame:
@@ -1291,6 +1331,35 @@ def render_variant_recommendation(recommendation: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_extended_metrics_table(best: pd.DataFrame) -> list[str]:
+    lines = ["## Extended Metrics For Split Winners", ""]
+    lines.append(
+        "| Split | Variant | Model | Spearman | Pearson | Kendall | RMSE | MAE | R2 | AUROC | AUPRC |"
+    )
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for _, row in best.iterrows():
+        lines.append(
+            "| {split} | {variant} | {model} | {spearman:.4f} | {pearson:.4f} | {kendall:.4f} | "
+            "{rmse:.4f} | {mae:.4f} | {r2:.4f} | {auroc:.4f} | {auprc:.4f} |".format(
+                split=row["split"],
+                variant=row["variant"],
+                model=row["model"],
+                spearman=float(row.get("spearman", np.nan)),
+                pearson=float(row.get("pearson", np.nan)),
+                kendall=float(row.get("kendall", np.nan)),
+                rmse=float(row.get("rmse", np.nan)),
+                mae=float(row.get("mae", np.nan)),
+                r2=float(row.get("r2", np.nan)),
+                auroc=float(row.get("sensitivity_auroc", np.nan)),
+                auprc=float(row.get("sensitivity_auprc", np.nan)),
+            )
+        )
+    lines.append("")
+    lines.append("Binary metrics use `label_binary=1` as sensitive and score `-predicted LN_IC50`.")
+    lines.append("")
+    return lines
+
+
 def build_index(config: dict[str, Any], paths: RunPaths) -> dict[str, Any]:
     return {
         "run_id": config["run_id"],
@@ -1338,8 +1407,42 @@ def metric_spearman(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(value) if value is not None else float("nan")
 
 
+def metric_pearson(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if len(y_true) < 3 or np.std(y_true) <= 1e-12 or np.std(y_pred) <= 1e-12:
+        return float("nan")
+    value = pd.Series(y_true).corr(pd.Series(y_pred), method="pearson")
+    return float(value) if value is not None else float("nan")
+
+
+def metric_kendall(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if len(y_true) < 3 or np.std(y_true) <= 1e-12 or np.std(y_pred) <= 1e-12:
+        return float("nan")
+    value = pd.Series(y_true).corr(pd.Series(y_pred), method="kendall")
+    return float(value) if value is not None else float("nan")
+
+
 def metric_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(math.sqrt(mean_squared_error(y_true, y_pred)))
+
+
+def regression_metric_bundle(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    return {
+        "spearman": metric_spearman(y_true, y_pred),
+        "pearson": metric_pearson(y_true, y_pred),
+        "kendall": metric_kendall(y_true, y_pred),
+        "rmse": metric_rmse(y_true, y_pred),
+        "mae": float(mean_absolute_error(y_true, y_pred)),
+        "r2": float(r2_score(y_true, y_pred)),
+    }
+
+
+def binary_metric_bundle(y_binary: np.ndarray, score: np.ndarray) -> dict[str, float]:
+    if len(np.unique(y_binary)) < 2:
+        return {"sensitivity_auroc": float("nan"), "sensitivity_auprc": float("nan")}
+    return {
+        "sensitivity_auroc": float(roc_auc_score(y_binary, score)),
+        "sensitivity_auprc": float(average_precision_score(y_binary, score)),
+    }
 
 
 def scale_by_train(X_train: np.ndarray, X_valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
