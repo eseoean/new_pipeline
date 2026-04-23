@@ -58,6 +58,8 @@ data/processed/runs/{run_id}/step2_intermediate/
 | `drug_target_mapping.parquet` | target gene symbols parsed from GDSC putative targets |
 | `sample_crispr.parquet` | selected DepMap CRISPR gene-effect features |
 | `drug_lincs.parquet` | selected LINCS drug-level features |
+| `raw_lincs_build_summary.json` | raw LINCS coverage, overlap cell IDs, matched signatures |
+| `lincs_policy_decision.json` | why this cancer uses all-cell, cancer-specific, or supporting-only LINCS |
 | `raw_source_manifest.json` | raw source provenance |
 | `input_qc.json` | row, drug, cell, mapping, and label QC |
 
@@ -90,6 +92,47 @@ SMILES handling is not hard-coded as a universal truth.
 | `all_drugs_zero_smiles` | keep all drugs and set SMILES-derived features to zero for invalid rows |
 
 HNSC and liver showed that this decision can differ by cancer type and by feature family. Every new cancer should compare both policies under identical random/drug/scaffold folds.
+
+## LINCS Policy
+
+LINCS scope should not be chosen by a single rigid rule such as "single-cell is always bad" or "disease-specific is always better." The policy should prefer the narrowest biologically defensible LINCS scope that still has enough coverage to act as a stable signal block.
+
+The key precedent is BRCA: the reference protocol used `MCF7` only. This is acceptable because `MCF7` is a canonical BRCA line and the LINCS coverage is very deep. By contrast, PAAD currently overlaps mainly on `YAPC`, which is too narrow to replace the stronger all-cell main run.
+
+Recommended decision rule:
+
+1. `cancer_specific_main`
+   - Use when two or more overlapping disease LINCS cell lines are available.
+2. `single_representative_main`
+   - Use when exactly one overlapping disease LINCS cell line is available,
+   - and that cell line is a declared representative disease line,
+   - and LINCS coverage is still deep enough to be stable.
+3. `all_cell_main`
+   - Use when disease-specific LINCS overlap is too sparse or too weak.
+   - Keep disease-restricted runs as sensitivity analyses.
+4. `cancer_specific_supporting_only`
+   - Use when a disease-overlap single-cell run exists but is not strong enough to become the main setting.
+
+The pipeline should record this decision explicitly in run outputs with:
+
+- `strategy`
+- `main_run_eligible`
+- `available_cancer_overlap_cell_ids`
+- `matched_drugs`
+- `matched_signatures`
+- `selection_reason`
+
+Config convention:
+
+```json
+"lincs_policy": {
+  "representative_cell_lines": ["MCF7"],
+  "single_cell_main_min_mapped_drugs": 80,
+  "single_cell_main_min_signatures": 5000
+}
+```
+
+If `representative_cell_lines` is empty, a one-cell disease-specific LINCS run is treated as supporting evidence unless strong justification is added separately.
 
 ## Selection Rule
 

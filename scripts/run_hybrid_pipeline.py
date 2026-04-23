@@ -706,7 +706,14 @@ def build_raw_lincs_features(
                 "matched_signatures": 0,
                 "selected_gene_features": 0,
                 "cell_filter": "none",
+                "cell_column": "",
                 "allowed_cell_ids": [],
+                "source_total_cell_line_count_after_drug_filter": 0,
+                "included_total_cell_line_count": 0,
+                "available_cancer_overlap_cell_ids": [],
+                "available_cancer_overlap_cell_line_count": 0,
+                "available_representative_cell_ids": [],
+                "available_representative_cell_line_count": 0,
             },
         )
         return empty_lincs_features(paths, drugs)
@@ -798,13 +805,31 @@ def filter_lincs_signatures_by_cell(
     cells: pd.DataFrame | None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     lincs_cfg = config.get("lincs", {})
+    policy_cfg = config.get("lincs_policy", {})
     policy = str(lincs_cfg.get("cell_filter", "all"))
     cell_col = first_existing_column(sig, ["cell_id", "cell_iname"])
+    representative_norm = {norm_key(value) for value in policy_cfg.get("representative_cell_lines", [])}
+    available_cancer_overlap: list[str] = []
+    available_representative: list[str] = []
+    source_total_cell_lines = int(sig[cell_col].astype(str).nunique()) if cell_col else 0
+    if cells is not None and cell_col is not None:
+        disease_names = {norm_key(value): str(value) for value in cells["cell_line_name"].astype(str)}
+        lincs_names = {norm_key(value): str(value) for value in sig[cell_col].astype(str).unique()}
+        available_cancer_overlap = sorted(lincs_names[key] for key in disease_names.keys() & lincs_names.keys())
+        available_representative = sorted(
+            value for value in available_cancer_overlap if norm_key(value) in representative_norm
+        )
     if policy in {"all", "none", ""}:
         return sig, {
             "cell_filter": "all",
             "cell_column": cell_col or "",
             "allowed_cell_ids": [],
+            "source_total_cell_line_count_after_drug_filter": source_total_cell_lines,
+            "included_total_cell_line_count": source_total_cell_lines,
+            "available_cancer_overlap_cell_ids": available_cancer_overlap,
+            "available_cancer_overlap_cell_line_count": int(len(available_cancer_overlap)),
+            "available_representative_cell_ids": available_representative,
+            "available_representative_cell_line_count": int(len(available_representative)),
             "signatures_after_cell_filter": int(len(sig)),
             "perturbagens_after_cell_filter": int(sig["pert_id"].astype(str).nunique()) if "pert_id" in sig.columns else 0,
         }
@@ -826,6 +851,12 @@ def filter_lincs_signatures_by_cell(
         "cell_filter": policy,
         "cell_column": cell_col,
         "allowed_cell_ids": allowed,
+        "source_total_cell_line_count_after_drug_filter": source_total_cell_lines,
+        "included_total_cell_line_count": int(filtered[cell_col].astype(str).nunique()),
+        "available_cancer_overlap_cell_ids": available_cancer_overlap,
+        "available_cancer_overlap_cell_line_count": int(len(available_cancer_overlap)),
+        "available_representative_cell_ids": available_representative,
+        "available_representative_cell_line_count": int(len(available_representative)),
         "signatures_after_cell_filter": int(len(filtered)),
         "perturbagens_after_cell_filter": int(filtered["pert_id"].astype(str).nunique()) if "pert_id" in filtered.columns else 0,
     }
@@ -1355,6 +1386,8 @@ def write_report(config: dict[str, Any], paths: RunPaths) -> None:
     qc_path = paths.step2 / "input_qc.json"
     if qc_path.exists():
         qc = json.loads(qc_path.read_text(encoding="utf-8"))
+        qc = augment_qc_with_lincs_policy(config, paths, qc)
+        write_json(qc_path, qc)
         sections.extend(
             [
                 "## Input QC",
@@ -1367,6 +1400,8 @@ def write_report(config: dict[str, Any], paths: RunPaths) -> None:
                 "",
             ]
         )
+        if "lincs_policy" in qc:
+            sections.extend(render_lincs_policy(qc["lincs_policy"]))
     for variant in config["variants"]:
         variant_dir = paths.step4 / variant
         summary_path = variant_dir / "input_summary.json"
@@ -1648,7 +1683,112 @@ def write_input_qc(
         },
         "warnings": build_qc_warnings(labels, cells, valid, lincs),
     }
+    qc = augment_qc_with_lincs_policy(config, paths, qc)
     write_json(paths.step2 / "input_qc.json", qc)
+
+
+def load_raw_lincs_summary(paths: RunPaths) -> dict[str, Any] | None:
+    summary_path = paths.step2 / "raw_lincs_build_summary.json"
+    if not summary_path.exists():
+        return None
+    return json.loads(summary_path.read_text(encoding="utf-8"))
+
+
+def build_lincs_qc_details(raw_summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": str(raw_summary.get("mode", "")),
+        "source": str(raw_summary.get("source", "")),
+        "cell_filter": str(raw_summary.get("cell_filter", "")),
+        "cell_column": str(raw_summary.get("cell_column", "")),
+        "matched_drugs": int(raw_summary.get("matched_drugs", 0)),
+        "matched_perturbagens": int(raw_summary.get("matched_perturbagens", 0)),
+        "matched_signatures": int(raw_summary.get("matched_signatures", 0)),
+        "included_total_cell_line_count": int(raw_summary.get("included_total_cell_line_count", 0)),
+        "available_cancer_overlap_cell_ids": [str(value) for value in raw_summary.get("available_cancer_overlap_cell_ids", [])],
+        "available_cancer_overlap_cell_line_count": int(raw_summary.get("available_cancer_overlap_cell_line_count", 0)),
+        "available_representative_cell_ids": [str(value) for value in raw_summary.get("available_representative_cell_ids", [])],
+        "available_representative_cell_line_count": int(raw_summary.get("available_representative_cell_line_count", 0)),
+    }
+
+
+def build_lincs_policy_decision(config: dict[str, Any], raw_summary: dict[str, Any]) -> dict[str, Any]:
+    policy_cfg = config.get("lincs_policy", {})
+    representative_cells = [str(value) for value in policy_cfg.get("representative_cell_lines", [])]
+    representative_norm = {norm_key(value) for value in representative_cells}
+    available_overlap = [str(value) for value in raw_summary.get("available_cancer_overlap_cell_ids", [])]
+    available_representative = [value for value in available_overlap if norm_key(value) in representative_norm]
+    matched_drugs = int(raw_summary.get("matched_drugs", 0))
+    matched_signatures = int(raw_summary.get("matched_signatures", 0))
+    available_overlap_count = int(raw_summary.get("available_cancer_overlap_cell_line_count", len(available_overlap)))
+    single_cell_min_drugs = int(policy_cfg.get("single_cell_main_min_mapped_drugs", 80))
+    single_cell_min_signatures = int(policy_cfg.get("single_cell_main_min_signatures", 5000))
+    filter_policy = str(raw_summary.get("cell_filter", ""))
+    mode = str(raw_summary.get("mode", ""))
+
+    strategy = "unclassified"
+    main_run_eligible = False
+    reason = "No LINCS policy rule matched."
+
+    if mode == "none":
+        strategy = "no_lincs"
+        reason = "LINCS mode is disabled for this run."
+    elif filter_policy == "all":
+        strategy = "all_cell_main"
+        main_run_eligible = True
+        if available_overlap_count == 0:
+            reason = "No directly overlapping disease LINCS cell line was available after drug matching, so all-cell drug-level LINCS is used as the fallback main setting."
+        elif available_overlap_count == 1:
+            reason = f"Only one directly overlapping disease LINCS cell line ({available_overlap[0]}) was available after drug matching, so all-cell LINCS remains the main setting and disease-restricted LINCS should be treated as sensitivity/supporting evidence."
+        else:
+            reason = f"This run keeps all-cell LINCS although {available_overlap_count} overlapping disease LINCS cell lines were available ({', '.join(available_overlap)}). In that situation, a disease-restricted LINCS main run should usually be preferred."
+            main_run_eligible = False
+    elif available_overlap_count >= 2:
+        strategy = "cancer_specific_main"
+        main_run_eligible = True
+        reason = f"{available_overlap_count} overlapping disease LINCS cell lines were available ({', '.join(available_overlap)}), so cancer-specific LINCS can be used as the main setting."
+    elif available_overlap_count == 1 and available_representative and matched_drugs >= single_cell_min_drugs and matched_signatures >= single_cell_min_signatures:
+        strategy = "single_representative_main"
+        main_run_eligible = True
+        reason = (
+            f"Only one overlapping disease LINCS cell line ({available_overlap[0]}) was available, but it is declared as a representative disease cell line and coverage is adequate "
+            f"({matched_drugs} matched drugs, {matched_signatures} matched signatures), so single-cell cancer-specific LINCS can be used as the main setting."
+        )
+    elif available_overlap_count == 1:
+        strategy = "cancer_specific_supporting_only"
+        reason = (
+            f"Only one overlapping disease LINCS cell line ({available_overlap[0]}) was available and it does not meet the representative single-cell main criteria "
+            f"({single_cell_min_drugs} matched drugs and {single_cell_min_signatures} signatures by default), so this disease-restricted LINCS run should be treated as sensitivity/supporting evidence."
+        )
+    else:
+        strategy = "cancer_specific_unavailable"
+        reason = "No overlapping disease LINCS cell line was available, so a cancer-specific LINCS main run is unavailable."
+
+    return {
+        "strategy": strategy,
+        "main_run_eligible": bool(main_run_eligible),
+        "selection_reason": reason,
+        "cell_filter": filter_policy,
+        "representative_cell_lines_declared": representative_cells,
+        "available_cancer_overlap_cell_ids": available_overlap,
+        "available_cancer_overlap_cell_line_count": available_overlap_count,
+        "available_representative_cell_ids": available_representative,
+        "available_representative_cell_line_count": int(len(available_representative)),
+        "matched_drugs": matched_drugs,
+        "matched_signatures": matched_signatures,
+        "single_cell_main_min_mapped_drugs": single_cell_min_drugs,
+        "single_cell_main_min_signatures": single_cell_min_signatures,
+    }
+
+
+def augment_qc_with_lincs_policy(config: dict[str, Any], paths: RunPaths, qc: dict[str, Any]) -> dict[str, Any]:
+    raw_summary = load_raw_lincs_summary(paths)
+    if raw_summary is None:
+        return qc
+    out = dict(qc)
+    out["lincs"] = build_lincs_qc_details(raw_summary)
+    out["lincs_policy"] = build_lincs_policy_decision(config, raw_summary)
+    write_json(paths.step2 / "lincs_policy_decision.json", out["lincs_policy"])
+    return out
 
 
 def build_qc_warnings(labels: pd.DataFrame, cells: pd.DataFrame, valid: pd.Series, lincs: pd.Series) -> list[str]:
@@ -1662,6 +1802,23 @@ def build_qc_warnings(labels: pd.DataFrame, cells: pd.DataFrame, valid: pd.Serie
     if int(pd.to_numeric(cells["is_depmap_mapped"], errors="coerce").fillna(0).sum()) < cells.shape[0]:
         warnings_out.append("some_cell_lines_missing_depmap_mapping")
     return warnings_out
+
+
+def render_lincs_policy(decision: dict[str, Any]) -> list[str]:
+    overlap = decision.get("available_cancer_overlap_cell_ids", [])
+    representatives = decision.get("representative_cell_lines_declared", [])
+    return [
+        "## LINCS Policy",
+        "",
+        f"- Strategy: `{decision.get('strategy', 'unknown')}`",
+        f"- Main-run eligible: {'yes' if decision.get('main_run_eligible') else 'no'}",
+        f"- Disease-overlap LINCS cells: {', '.join(overlap) if overlap else 'none'}",
+        f"- Representative cells declared: {', '.join(representatives) if representatives else 'none'}",
+        f"- Matched drugs: {int(decision.get('matched_drugs', 0))}",
+        f"- Matched signatures: {int(decision.get('matched_signatures', 0))}",
+        f"- Reason: {decision.get('selection_reason', '')}",
+        "",
+    ]
 
 
 def enrich_completed_metrics(combined: pd.DataFrame, paths: RunPaths) -> pd.DataFrame:

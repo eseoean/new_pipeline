@@ -14,6 +14,16 @@
 - CRISPR features: 3500
 - LINCS mapped drugs: 120
 
+## LINCS Policy
+
+- Strategy: `all_cell_main`
+- Main-run eligible: yes
+- Disease-overlap LINCS cells: YAPC
+- Representative cells declared: none
+- Matched drugs: 120
+- Matched signatures: 17978
+- Reason: Only one directly overlapping disease LINCS cell line (YAPC) was available after drug matching, so all-cell LINCS remains the main setting and disease-restricted LINCS should be treated as sensitivity/supporting evidence.
+
 ## legacy_rich_valid_smiles_only
 
 - Input shape: [4110, 6524]

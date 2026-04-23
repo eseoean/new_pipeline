@@ -62,6 +62,14 @@ CMap2020 gives a stronger biology-aligned PAAD-overlap LINCS source than GSE7013
 
 The all-cell LINCS aggregation remains the strongest strict raw-only setting for PAAD. The YAPC-only filters are biologically stricter and match the colon-style logic, but PAAD-specific LINCS remains a one-cell-line sensitivity experiment because both GSE70138 and CMap2020 only overlap directly on YAPC.
 
+Current policy decision:
+
+- PAAD main LINCS strategy: `all_cell_main`
+- Reason: direct PAAD-overlap LINCS is still `YAPC` single-cell only, and that does not have BRCA/MCF7-style representative single-cell justification yet.
+- Therefore:
+  - `all-cell` stays the main production run
+  - `YAPC-only` stays a sensitivity/supporting run
+
 The no-LINCS control drops sharply on drug-group and scaffold splits. This suggests LINCS contributes meaningful generalization signal, but the best PAAD setting is currently the raw-derived all-cell drug-level LINCS aggregation, not the YAPC-only cancer-filtered variant.
 
 For reporting:

@@ -77,6 +77,11 @@
     "cell_filter": "all",
     "description": "Use all matched raw LINCS trt_cp signatures regardless of LINCS cell_id."
   },
+  "lincs_policy": {
+    "representative_cell_lines": [],
+    "single_cell_main_min_mapped_drugs": 80,
+    "single_cell_main_min_signatures": 5000
+  },
   "variants": [
     "legacy_rich_valid_smiles_only",
     "legacy_rich_all_drugs_zero_smiles",

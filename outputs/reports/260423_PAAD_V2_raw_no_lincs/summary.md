@@ -14,6 +14,16 @@
 - CRISPR features: 3500
 - LINCS mapped drugs: 0
 
+## LINCS Policy
+
+- Strategy: `no_lincs`
+- Main-run eligible: no
+- Disease-overlap LINCS cells: none
+- Representative cells declared: none
+- Matched drugs: 0
+- Matched signatures: 0
+- Reason: LINCS mode is disabled for this run.
+
 ## legacy_rich_valid_smiles_only
 
 - Input shape: [4110, 5756]
