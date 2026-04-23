@@ -1,0 +1,41 @@
+{
+  "recommended_variant": "legacy_rich_valid_smiles_only",
+  "recommendation_basis": "highest mean Spearman across drug_group_4fold and scaffold_group_4fold",
+  "mean_generalization_scores": [
+    {
+      "variant": "legacy_rich_valid_smiles_only",
+      "mean_drug_scaffold_spearman": 0.7093657344623319
+    },
+    {
+      "variant": "legacy_rich_all_drugs_zero_smiles",
+      "mean_drug_scaffold_spearman": 0.607088248185182
+    },
+    {
+      "variant": "colonstyle_compact_baseline",
+      "mean_drug_scaffold_spearman": 0.5578457442647355
+    }
+  ],
+  "split_winners": [
+    {
+      "variant": "legacy_rich_valid_smiles_only",
+      "split": "drug_group_4fold",
+      "model": "extratrees",
+      "spearman": 0.7026204295963799,
+      "rmse": 2.051174743685208
+    },
+    {
+      "variant": "legacy_rich_valid_smiles_only",
+      "split": "random_4fold",
+      "model": "weighted_top3_ensemble",
+      "spearman": 0.8975836399661107,
+      "rmse": 1.157505333395879
+    },
+    {
+      "variant": "legacy_rich_valid_smiles_only",
+      "split": "scaffold_group_4fold",
+      "model": "weighted_top3_ensemble",
+      "spearman": 0.7161110393282839,
+      "rmse": 2.0146918687378106
+    }
+  ]
+}

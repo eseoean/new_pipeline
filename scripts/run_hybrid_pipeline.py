@@ -1829,7 +1829,7 @@ def enrich_completed_metrics(combined: pd.DataFrame, paths: RunPaths) -> pd.Data
     """
 
     out = combined.copy()
-    label_cache: dict[str, pd.DataFrame] = {}
+    threshold_cache: dict[str, float] = {}
     metric_rows: list[dict[str, Any]] = []
     for _, row in out.iterrows():
         if row.get("status") != "completed":
@@ -1848,13 +1848,18 @@ def enrich_completed_metrics(combined: pd.DataFrame, paths: RunPaths) -> pd.Data
         metrics = regression_metric_bundle(y_true, y_pred)
         metrics["n_eval"] = int(len(oof))
 
-        if variant not in label_cache:
-            label_cache[variant] = pd.read_parquet(
+        if variant not in threshold_cache:
+            train_table = pd.read_parquet(
                 paths.step4 / variant / "train_table.parquet",
-                columns=["pair_id", "label_binary"],
+                columns=["binary_threshold"],
             )
-        binary = oof[["pair_id"]].merge(label_cache[variant], on="pair_id", how="left")["label_binary"]
-        y_binary = pd.to_numeric(binary, errors="coerce").fillna(0).astype(int).to_numpy()
+            thresholds = pd.to_numeric(train_table["binary_threshold"], errors="coerce").dropna().unique()
+            threshold_cache[variant] = float(thresholds[0]) if len(thresholds) else float("nan")
+        threshold = threshold_cache[variant]
+        if math.isnan(threshold):
+            y_binary = np.zeros(len(y_true), dtype=int)
+        else:
+            y_binary = (y_true <= threshold).astype(int)
         metrics.update(binary_metric_bundle(y_binary, -y_pred))
         metric_rows.append(metrics)
 
