@@ -1,0 +1,10 @@
+{
+  "extends": "liver_raw_lincs_cmap2020_all.json",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_LIVER_V2/raw_lincs_cmap2020_overlap",
+  "run_id": "260423_LIVER_V2_raw_lincs_cmap2020_overlap",
+  "lincs": {
+    "mode": "raw",
+    "cell_filter": "cancer_overlap",
+    "description": "Use only LINCS2020 trt_cp signatures from direct LIHC cell-line overlaps."
+  }
+}

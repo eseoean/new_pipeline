@@ -113,6 +113,13 @@ Recommended decision rule:
 4. `cancer_specific_supporting_only`
    - Use when a disease-overlap single-cell run exists but is not strong enough to become the main setting.
 
+This coverage-based rule should define the candidate disease-specific setting, but it should not be treated as an irreversible final choice. When a disease-specific LINCS run is available, the pipeline should still benchmark:
+
+- `all-cell`
+- `disease-specific`
+
+under identical random/drug/scaffold folds. If the disease-specific run does not beat the all-cell run on drug/scaffold generalization, keep `all-cell` as the final main setting and record the disease-specific run as a sensitivity analysis. Liver is the current example: `HUH7 + JHH7` overlap exists, but the all-cell LINCS run still generalizes better.
+
 The pipeline should record this decision explicitly in run outputs with:
 
 - `strategy`

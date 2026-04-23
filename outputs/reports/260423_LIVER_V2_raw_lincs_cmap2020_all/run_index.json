@@ -1,0 +1,9 @@
+{
+  "run_id": "260423_LIVER_V2_raw_lincs_cmap2020_all",
+  "cancer_id": "LIHC",
+  "root": "/Users/skku_aws2_18/team4_project/lung/new_pipeline",
+  "run_dir": "/Users/skku_aws2_18/team4_project/lung/new_pipeline/data/processed/runs/260423_LIVER_V2_raw_lincs_cmap2020_all",
+  "reports": "/Users/skku_aws2_18/team4_project/lung/new_pipeline/outputs/reports/260423_LIVER_V2_raw_lincs_cmap2020_all",
+  "summary": "/Users/skku_aws2_18/team4_project/lung/new_pipeline/outputs/reports/260423_LIVER_V2_raw_lincs_cmap2020_all/summary.md",
+  "upload_prefix": "s3://say2-4team/20260409_eseo/260423_LIVER_V2/raw_lincs_cmap2020_all"
+}
